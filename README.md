@@ -28,7 +28,7 @@ pip install .
 ```
 
 ## Datasets
-prompt_sf/snips/data目录下缺少emb文件夹，可以前往[emb](https://github.com/W-lw/PCLC/tree/main/data/snips/emb)进行下载
+data文件夹需要从[data](https://drive.google.com/file/d/1LTgt3QII8Vnt9C7b0pjHrFKik61bU9hu/view?usp=drive_link)下载，复制到prompt_sf目录下即可
 
 ## Train&&Test
 cd prompt_sf目录下，执行test.sh脚本即可
