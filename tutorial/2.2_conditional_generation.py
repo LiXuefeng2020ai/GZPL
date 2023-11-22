@@ -19,9 +19,9 @@ print(args)
 
 from openprompt.data_utils.conditional_generation_dataset import WebNLGProcessor
 dataset = {}
-dataset['train'] = WebNLGProcessor().get_train_examples("./datasets/CondGen/webnlg_2017/")
-dataset['validation'] = WebNLGProcessor().get_dev_examples("./datasets/CondGen/webnlg_2017/")
-dataset['test'] = WebNLGProcessor().get_test_examples("./datasets/CondGen/webnlg_2017/")
+dataset['train'] = WebNLGProcessor().get_train_examples("CondGen/webnlg_2017/")
+dataset['validation'] = WebNLGProcessor().get_dev_examples("CondGen/webnlg_2017/")
+dataset['test'] = WebNLGProcessor().get_test_examples("CondGen/webnlg_2017/")
 
 
 # load a pretrained model, its tokenizer, its config, and its TokenzerWrapper by one function 
@@ -35,7 +35,7 @@ from openprompt.prompts.prefix_tuning_template import PrefixTuningTemplate
 # mytemplate = PrefixTuningTemplate(model=plm, tokenizer=tokenizer)
 # is equal to 
 # mytemplate = PrefixTuningTemplate(model=plm, tokenizer=tokenizer, text='{"placeholder":"text_a"} {"mask"}')
-mytemplate = PrefixTuningTemplate(model=plm,  tokenizer=tokenizer, text=' {"placeholder":"text_a"} {"special": "<eos>"} {"mask"} ', using_decoder_past_key_values=False)
+mytemplate = PrefixTuningTemplate(model=plm,  tokenizer=tokenizer, text=' {"placeholder":"text_a"} {"special": "<eos>"} {"mask"} ', using_decoder_past_key_values=False,prefix_dropout=0.2)
 
 # To better understand how does the template wrap the example, we visualize one instance.
 # You may observe that the example doesn't end with <|endoftext|> token. Don't worry, adding specific end-of-text token

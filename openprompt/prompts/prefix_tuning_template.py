@@ -1,5 +1,6 @@
 
 from functools import partial
+from threading import current_thread
 from transformers.configuration_utils import PretrainedConfig
 from transformers.models.gpt2.configuration_gpt2 import GPT2Config
 from transformers.models.t5.configuration_t5 import T5Config
@@ -14,6 +15,13 @@ from transformers import PreTrainedModel
 from transformers.tokenization_utils import PreTrainedTokenizer
 from openprompt import Template
 from openprompt.utils.logging import logger
+import pickle
+import numpy as np
+from prompt_sf.config import get_params
+from prompt_sf.preprecessor import domain2slot
+import pdb
+
+args = get_params()
 
 
 class PrefixTuningTemplate(Template):
@@ -48,6 +56,8 @@ class PrefixTuningTemplate(Template):
                  mid_dim: Optional[int] =  512,
                  using_encoder_past_key_values: Optional[bool] = True,
                  using_decoder_past_key_values: Optional[bool] = True,
+                #  using_pretrained_weights: Optional[bool] = False,
+                #  weights = None,
                 ):
         super().__init__(tokenizer=tokenizer,
                          mask_token=mask_token,
@@ -57,6 +67,7 @@ class PrefixTuningTemplate(Template):
         self.mapping_hook = mapping_hook
         self.embedding_size = raw_embedding.weight.shape[-1]
         self.num_token = num_token
+        # self.num_token = 39
 
         self.using_encoder_past_key_values = using_encoder_past_key_values
         self.using_decoder_past_key_values = using_decoder_past_key_values
@@ -86,7 +97,9 @@ class PrefixTuningTemplate(Template):
         self.default_text2 = '{"placeholder": "text_a"} {"placeholder": "text_b"} {"mask"}'
 
         self.text = text
-        
+        # self.using_pretrained_weights = using_pretrained_weights
+        # self.weights = weights
+        # print(1)
         self.generate_parameters() # in prefix tuning the template text has no interact with the parameters.
 
         self.plm_modified = False # flag to indicate whether the function of plm are replaced for prefix tuning.
@@ -132,24 +145,48 @@ class PrefixTuningTemplate(Template):
         Generate parameters needed for new tokens' embedding in P-tuning
         """
         
+        # self.slot_embs = self.get_slot_matrix(args.slots_emb_file)
+        # if not args.pretrain:
+        #     self.weights = self.get_pretrained_weights()
         self.input_tokens = nn.Parameter(torch.arange(self.num_token).long(), requires_grad=False) # to allow automatic devicing
         if self.config.is_encoder_decoder and self.using_encoder_past_key_values:
-            self.wte = nn.Embedding(self.num_token, self.n_embd)
+            if args.using_pretrained_weights:
+                self.wte = nn.Embedding(num_embeddings=self.num_token, embedding_dim=self.n_embd, _weight=self.weights[0])
+            else:
+                self.wte = nn.Embedding(num_embeddings=self.num_token, embedding_dim=self.n_embd)
             self.control_trans = nn.Sequential(
                 nn.Linear(self.n_embd, self.mid_dim),
                 nn.Tanh(),
-                # nn.Linear(self.mid_dim, self.mid_dim),
-                # nn.Tanh(),
                 nn.Linear(self.mid_dim, self.n_layer * 2 * self.n_embd))
 
         if (not self.config.is_encoder_decoder) or self.using_decoder_past_key_values:
-            self.decoder_wte = nn.Embedding(self.num_token, self.n_embd)
+            if args.using_pretrained_weights:
+                self.decoder_wte = nn.Embedding(num_embeddings=self.num_token, embedding_dim=self.n_embd,_weight=self.weights[1])
+            else:
+                self.decoder_wte = nn.Embedding(num_embeddings=self.num_token, embedding_dim=self.n_embd)
             self.decoder_control_trans = nn.Sequential(
             nn.Linear(self.n_embd, self.mid_dim),
             nn.Tanh(),
-            # nn.Linear(self.mid_dim, self.mid_dim),
-            # nn.Tanh(),
             nn.Linear(self.mid_dim, self.n_decoder_layer * 2 * self.n_embd))
+        
+        # self.input_tokens = nn.Parameter(torch.arange(self.num_token).long(), requires_grad=False) # to allow automatic devicing
+        # if self.config.is_encoder_decoder and self.using_encoder_past_key_values:
+        #     self.wte = nn.Embedding(self.num_token, self.n_embd)
+        #     self.control_trans = nn.Sequential(
+        #         nn.Linear(self.n_embd, self.mid_dim),
+        #         nn.Tanh(),
+        #         # nn.Linear(self.mid_dim, self.mid_dim),
+        #         # nn.Tanh(),
+        #         nn.Linear(self.mid_dim, self.n_layer * 2 * self.n_embd))
+
+        # if (not self.config.is_encoder_decoder) or self.using_decoder_past_key_values:
+        #     self.decoder_wte = nn.Embedding(self.num_token, self.n_embd)
+        #     self.decoder_control_trans = nn.Sequential(
+        #     nn.Linear(self.n_embd, self.mid_dim),
+        #     nn.Tanh(),
+        #     # nn.Linear(self.mid_dim, self.mid_dim),
+        #     # nn.Tanh(),
+        #     nn.Linear(self.mid_dim, self.n_decoder_layer * 2 * self.n_embd))
 
 
     def wrap_one_example(self, example) -> List[Dict]:
@@ -236,5 +273,37 @@ class PrefixTuningTemplate(Template):
         else:
             raise NotImplementedError
         self.plm_modified = True
+    
+    def get_slot_matrix(self,emb_file):
+        with open(emb_file, "rb") as f:
+            slots_embeddings = pickle.load(f)
+        record_slots = []
+        for key,value in slots_embeddings.items():
+            # pdb.set_trace()
+            for idx,slot in enumerate(value):
+                slot = slot.reshape(1,-1)
+                cur_slot_name = domain2slot[key][idx]
+                if key=="AddToPlaylist" and idx==0:
+                    slot_embs = slot
+                    record_slots.append(cur_slot_name)
+                elif cur_slot_name not in record_slots:
+                    slot_embs = np.concatenate((slot_embs,slot))
+                    record_slots.append(cur_slot_name)
+                else:
+                    continue
+                
+        slot_embs = torch.from_numpy(slot_embs)
+        slot_embs = slot_embs.to(torch.float32)
+        # pdb.set_trace()
+        return slot_embs
+    
+    def get_pretrained_weights(self):
+        model_dir = args.model_dir
+        template_model = torch.load(os.path.join(model_dir,"prefix_tuning_best_model.pth"))
+        encoder_embs = template_model['template']['wte.weight'] # 预训练模型参数未改动，加载模板相关参数即可
+        decoder_embs = template_model['template']['decoder_wte.weight']
+        return [encoder_embs,decoder_embs]
+
+    
 
     

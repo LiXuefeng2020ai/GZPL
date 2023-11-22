@@ -1,22 +1,33 @@
 import argparse
+from re import template
 import torch
 import pdb
+import logging
+import os
+import sys
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser("")
-parser.add_argument("--lr", type=float, default=1e-2)
+parser.add_argument("--lr", type=float, default=5e-5)
 parser.add_argument("--plm_eval_mode", action="store_true")
 parser.add_argument("--model", type=str, default='t5')  # tested model are gpt2/t5
 parser.add_argument("--model_name_or_path", default='t5-base')
+parser.add_argument("--model_saved_path", default='test_model_save')
+parser.add_argument("--batch_size", type=int, default=5)
 args = parser.parse_args()
 
+log = logging.getLogger(__name__)
+logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+fh = logging.FileHandler(os.path.join(args.model_saved_path,"log.txt"))
+log.addHandler(fh)
 
 from openprompt.data_utils.conditional_generation_dataset import WebNLGProcessor
 
 
 dataset = {}
-dataset['train'] = WebNLGProcessor().get_train_examples("CondGen/webnlg_2017/")
-dataset['validation'] = WebNLGProcessor().get_dev_examples("CondGen/webnlg_2017/")
-dataset['test'] = WebNLGProcessor().get_test_examples("CondGen/webnlg_2017/")
+dataset['train'] = WebNLGProcessor().get_train_examples("../data/CondGen/webnlg_2017/")
+dataset['validation'] = WebNLGProcessor().get_dev_examples("../data/CondGen/webnlg_2017/")
+dataset['test'] = WebNLGProcessor().get_test_examples("../data/CondGen/webnlg_2017/")
 
 
 
@@ -39,9 +50,9 @@ plm, tokenizer, model_config, WrapperClass = load_plm(args.model, args.model_nam
 
 
 # Or use a mix template
-from openprompt.prompts import SoftTemplate
+from openprompt.prompts import SoftTemplate,PrefixTuningTemplate
 
-mytemplate = SoftTemplate(model=plm, tokenizer=tokenizer, text='{"placeholder":"text_a"} {"special": "<eos>"} {"mask"}',num_tokens=100)
+mytemplate = PrefixTuningTemplate(model=plm, tokenizer=tokenizer, text='{"placeholder":"text_a"} {"special": "<eos>"} {"mask"}',prefix_dropout=0.2,using_decoder_past_key_values=False)
 
 # mytemplate = SoftTemplate(model=plm, tokenizer=tokenizer, text='{"placeholder":"text_a"} {"soft"} {"soft"} {"soft"} {"placeholder":"text_b"} {"soft"} {"mask"}.')
 
@@ -92,12 +103,20 @@ from transformers import AdamW
 
 
 # Using different optimizer for prompt parameters and model parameters
+no_decay = ["bias", "LayerNorm.weight"]
 optimizer_grouped_parameters = [
-    {'params': [p for n,p in prompt_model.template.named_parameters() if "raw_embedding" not in n]}
+{
+    "params": [p for n, p in mytemplate.named_parameters() if (not any(nd in n for nd in no_decay)) and p.requires_grad],
+    "weight_decay": 0.0,
+},
+{
+    "params": [p for n, p in mytemplate.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad],
+    "weight_decay": 0.0,
+},
 ]
 
 # optimizer1 = AdamW(optimizer_grouped_parameters1, lr=1e-4)
-optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
+optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, eps=1e-8)
 
 from transformers.optimization import get_linear_schedule_with_warmup
 
@@ -109,11 +128,13 @@ from openprompt.utils.metrics import generation_metric
 def evaluate(prompt_model, dataloader):
     generated_sentence = []
     groundtruth_sentence = []
-
+    prompt_model.eval()
+    
     for step, inputs in enumerate(dataloader):
         if use_cuda:
             inputs = inputs.cuda()
         _, output_sentence = prompt_model.generate(inputs, **generation_arguments)
+        # pdb.set_trace()
         generated_sentence.extend(output_sentence)
         groundtruth_sentence.extend(inputs['tgt_text'])
     score = generation_metric(generated_sentence, groundtruth_sentence, "sentence_bleu")
@@ -133,27 +154,58 @@ generation_arguments = {
     "num_beams": 5,
     "bad_words_ids": None
 }
+# pbar = tqdm(enumerate(train_dataloader),total=len(train_dataloader))
 
-global_step = 0 
-tot_loss = 0 
-log_loss = 0
-# training and generation.
-tot_loss = 0 
-for epoch in range(5):
-    for step, inputs in enumerate(train_dataloader):
-        global_step +=1
-        if use_cuda:
-            inputs = inputs.cuda()
-        loss = prompt_model(inputs)
-        loss.backward()
-        tot_loss += loss.item()
-        torch.nn.utils.clip_grad_norm_(mytemplate.parameters(), 1.0)
-        optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad()
-        if global_step %500 ==0: 
-            print("Epoch {}, global_step {} average loss: {} lr: {}".format(epoch, global_step, (tot_loss-log_loss)/500, scheduler.get_last_lr()[0]), flush=True)
-            log_loss = tot_loss
+
+# global_step = 0 
+# tot_loss = 0 
+# log_loss = 0
+# # training and generation.
+# tot_loss = 0 
+# for epoch in range(5):
+#     best_dev_acc = 0.0
+#     cur_dev_acc = 0.0
+#     log.info("training begining!")
+#     prompt_model.train()
+#     for step, inputs in pbar:
+#         global_step +=1
+#         if use_cuda:
+#             inputs = inputs.cuda()
+#         loss = prompt_model(inputs)
+#         loss.backward()
+#         # tot_loss += loss.item()
+#         torch.nn.utils.clip_grad_norm_(mytemplate.parameters(), 1.0)
+#         optimizer.step()
+#         scheduler.step()
+#         optimizer.zero_grad()
+
+#         pbar.set_description(f"Epoch {epoch}, global_step {global_step}, loss: {'%.2f'%loss.item()}")
+#         # if global_step %500 ==0: 
+#         #     print("Epoch {}, global_step {} average loss: {} lr: {}".format(epoch, global_step, (tot_loss-log_loss)/500, scheduler.get_last_lr()[0]), flush=True)
+#         #     log_loss = tot_loss
+#     cur_dev_acc = evaluate(prompt_model,validation_dataloader)
+#     log.info(f"cur_dev_acc is {cur_dev_acc}")
+#     if cur_dev_acc>best_dev_acc:
+#         best_dev_acc = cur_dev_acc
+#         log.info(f"found better model!!!")
+#         torch.save(prompt_model.state_dict(),os.path.join(args.model_saved_path,"prefix_tuning_best_model.pth"))
+#         cur_test_acc = evaluate(prompt_model,test_dataloader)
+#         log.info(f"best result is {cur_test_acc}")
         
-evaluate(prompt_model, test_dataloader)
 
+# prompt_model_new = prompt_model.load_state_dict(torch.load(os.path.join(args.model_saved_path,"best_model_new.pth")))
+template_model = torch.load(os.path.join(args.model_saved_path,"prefix_tuning_best_model.pth"))
+mytemplate.load_state_dict(template_model['template'])
+# pdb.set_trace()
+
+# model(test_dataloader[0])
+prompt_model = PromptForGeneration(plm=plm,template=mytemplate,tokenizer=tokenizer)
+# for batch in test_dataloader:
+#     if use_cuda:
+#         batch.cuda()
+#     _,output = prompt_model.generate(batch,**generation_arguments)
+    # pdb.set_trace()
+# pdb.set_trace()
+log.info("evaluating begin!!!")
+res = evaluate(prompt_model, test_dataloader)
+log.info(f"best result is {res}")

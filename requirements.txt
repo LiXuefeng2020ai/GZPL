@@ -1,10 +1,11 @@
-torch==1.9.0
+# torch==1.9.0
+# openprompt==1.0
 transformers==4.10.0
+tqdm==4.62.2
+yacs==0.1.8
+protobuf==3.19.1
+datasets==1.16.0
+tensorboardX==2.4.1
 sentencepiece==0.1.96
 scikit-learn==0.24.2
-tqdm==4.62.2
-tensorboardX
-nltk
-yacs
-dill
-datasets
+nltk==3.6.5

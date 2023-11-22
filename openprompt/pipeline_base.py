@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from yacs.config import CfgNode
 from openprompt.utils.logging import logger
 from transformers import  AdamW, get_linear_schedule_with_warmup
-
+import pdb
 
 
 class PromptDataLoader(object):
@@ -58,7 +58,6 @@ class PromptDataLoader(object):
         assert hasattr(dataset, "__iter__"), f"The dataset must have __iter__ method. dataset is {dataset}"
         assert hasattr(dataset, "__len__"), f"The dataset must have __len__ method. dataset is {dataset}"
         self.raw_dataset = dataset
-        
         self.wrapped_dataset = []
         self.tensor_dataset = []
         self.template = template
@@ -171,7 +170,7 @@ class PromptModel(nn.Module):
                 module.train(mode)
         return self
         
-        
+
     def forward(self, batch: Union[Dict, InputFeatures]) -> torch.Tensor:
         r""" 
         This is a forward method to make wrapped input data go through the model, and return the output logits.
@@ -264,6 +263,7 @@ class PromptForClassification(nn.Module):
         outputs = self.verbalizer.gather_outputs(outputs)
         outputs_at_mask = self.extract_at_mask(outputs, batch)
         label_words_logits = self.verbalizer.process_outputs(outputs_at_mask, batch=batch)
+        # pdb.set_trace()
         return label_words_logits
     
     def predict(self):
@@ -427,11 +427,13 @@ class PromptForGeneration(nn.Module, GenerationMixin):
         outputs = self.prompt_model(batch)
         logits = outputs.logits
         logits, labels = self.shift_logits_and_labels(logits, batch['loss_ids'], reference_ids)
+        # pdb.set_trace()
         batch_size, seq_len, vocab_size = logits.shape
         loss = self.loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        # pdb.set_trace()
         loss = loss.view(batch_size, -1).sum(dim=-1) #TODO support more objectives
         loss = loss.mean()
-        return loss
+        return loss, logits
     
     
     def generate(self, batch: Union[Dict, InputFeatures], **generation_kwargs):
@@ -457,10 +459,12 @@ class PromptForGeneration(nn.Module, GenerationMixin):
 
             self.generate_ith_token = 0
             self.in_generation_function = True
-            output_sequences = super().generate(**batch, **input_generation_kwargs, pad_token_id=self.tokenizer.pad_token_id, eos_token_id=self.tokenizer.eos_token_id)
+            output_sequences = super().generate(**batch, **input_generation_kwargs, pad_token_id=self.tokenizer.pad_token_id, eos_token_id=self.tokenizer.eos_token_id, output_scores=True, return_dict_in_generate=True)
+            # pdb.set_trace()
             self.in_generation_function = False
-            output_sequences = output_sequences.cpu().tolist()
-            generated_sentences = self.post_processing(output_sequences=output_sequences, input_lengths=input_length)
+            output_sequences_new = output_sequences[0].cpu().tolist()
+            # pdb.set_trace()
+            generated_sentences = self.post_processing(output_sequences=output_sequences_new, input_lengths=input_length)
         else:
             input_length = batch['input_ids'].size(1)
             batch_size = batch['input_ids'].size(0)
@@ -482,7 +486,7 @@ class PromptForGeneration(nn.Module, GenerationMixin):
                 self.in_generation_function = False
                 output_sequences.extend(output_sequence.cpu().tolist()) # TODO: to support generate multiple sentence
             generated_sentences = self.post_processing(output_sequences=output_sequences, input_lengths=input_real_lens.cpu().tolist())
-        return output_sequences, generated_sentences
+        return output_sequences[1], generated_sentences
     
 
 
@@ -508,7 +512,7 @@ class PromptForGeneration(nn.Module, GenerationMixin):
                 text_output = text_output[:idx]
             text_output = text_output.strip()
             generated_sentences.append(text_output)
-        print(generated_sentences)
+        # print(generated_sentences)
         return generated_sentences
 
 
